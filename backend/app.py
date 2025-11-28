@@ -43,6 +43,7 @@ def get_tasks():
 def add_task():
     data = request.json
     title = data["title"]
+    print(title)
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("INSERT INTO tasks (title) VALUES (%s) RETURNING id, title, completed, created_at", (title,))
