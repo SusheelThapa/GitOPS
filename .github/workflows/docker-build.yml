@@ -1,0 +1,74 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - "frontend/**"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    env:
+      DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # ------------------ Login to Docker Hub ------------------
+      - name: Login to Docker Hub
+        run: |
+          echo "${DOCKER_HUB_TOKEN}" | docker login -u "${DOCKER_HUB_USERNAME}" --password-stdin
+
+      # ------------------ Detect Backend Changes ------------------
+      - name: Detect Backend Changes
+        run: |
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            if git diff --name-only HEAD~1 HEAD | grep '^backend/'; then
+              echo "backend_changed=true" >> $GITHUB_ENV
+            else
+              echo "backend_changed=false" >> $GITHUB_ENV
+            fi
+          else
+            echo "No previous commit, assume backend changed."
+            echo "backend_changed=true" >> $GITHUB_ENV
+          fi
+
+      # ------------------ Detect Frontend Changes ------------------
+      - name: Detect Frontend Changes
+        run: |
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            if git diff --name-only HEAD~1 HEAD | grep '^frontend/'; then
+              echo "frontend_changed=true" >> $GITHUB_ENV
+            else
+              echo "frontend_changed=false" >> $GITHUB_ENV
+            fi
+          else
+            echo "No previous commit, assume frontend changed."
+            echo "frontend_changed=true" >> $GITHUB_ENV
+
+      # ------------------ Build & Push Backend ------------------
+      - name: Build Backend Image
+        if: env.backend_changed == 'true'
+        run: docker build -t ${DOCKER_HUB_USERNAME}/task-backend:latest ./backend
+
+      - name: Push Backend Image
+        if: env.backend_changed == 'true'
+        run: docker push ${DOCKER_HUB_USERNAME}/task-backend:latest
+
+      # ------------------ Build & Push Frontend ------------------
+      - name: Build Frontend Image
+        if: env.frontend_changed == 'true'
+        run: docker build -t ${DOCKER_HUB_USERNAME}/task-frontend:latest ./frontend
+
+      - name: Push Frontend Image
+        if: env.frontend_changed == 'true'
+        run: docker push ${DOCKER_HUB_USERNAME}/task-frontend:latest
