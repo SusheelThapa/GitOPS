@@ -13,22 +13,10 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
     
-    # Step 1: Create sequence if not exists
-    cur.execute("""
-    DO $$
-    BEGIN
-        IF NOT EXISTS (
-            SELECT 1
-            FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind = 'S'
-              AND c.relname = 'tasks_id_seq'
-        ) THEN
-            CREATE SEQUENCE tasks_id_seq;
-        END IF;
-    END
-    $$;
-    """)
+    # FIX: Use IF NOT EXISTS for the sequence to prevent race conditions 
+    # when multiple containers start up simultaneously.
+    # Step 1: Create sequence if not exists (Atomic operation)
+    cur.execute("CREATE SEQUENCE IF NOT EXISTS tasks_id_seq;")
     
     # Step 2: Create table if not exists and use the sequence
     cur.execute("""
@@ -40,10 +28,13 @@ def init_db():
     );
     """)
     
+    # Step 3: Ensure the sequence ownership is set correctly (Good practice)
+    # The DEFAULT nextval() already links it, but ownership is safer.
+    cur.execute("ALTER SEQUENCE tasks_id_seq OWNED BY tasks.id;")
+    
     conn.commit()
     cur.close()
     conn.close()
-
 
 
 init_db()  # Call on startup
@@ -64,21 +55,24 @@ def get_tasks():
 @app.post("/tasks")
 def add_task():
     data = request.json
+    # Added error handling for missing 'title'
+    if 'title' not in data:
+        return jsonify({"error": "Missing 'title' in request body"}), 400
+        
     title = data["title"]
-    print(title)
+    # print(title) # Removed print statement for production readiness
     conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO tasks (title) VALUES (%s) RETURNING id, title, completed, created_at", (title,))
+    cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor) # Use DictCursor to return a dictionary
+    
+    # Note: RETURNING * is simpler than listing all columns manually
+    cur.execute("INSERT INTO tasks (title) VALUES (%s) RETURNING *", (title,))
     new_task = cur.fetchone()
     conn.commit()
     cur.close()
     conn.close()
-    return jsonify({
-        "id": new_task[0],
-        "title": new_task[1],
-        "completed": new_task[2],
-        "created_at": new_task[3]
-    })
+    
+    # Return the result as a standard dictionary from DictCursor
+    return jsonify(dict(new_task)), 201
 
 # Toggle completed
 @app.put("/tasks/<int:id>")
@@ -94,6 +88,10 @@ def toggle_task(id):
     conn.commit()
     cur.close()
     conn.close()
+    
+    if updated is None:
+        return jsonify({"message": f"Task with id {id} not found."}), 404
+
     return jsonify(dict(updated))
 
 # Delete task
@@ -102,9 +100,14 @@ def delete_task(id):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM tasks WHERE id = %s", (id,))
+    rows_deleted = cur.rowcount # Check how many rows were affected
     conn.commit()
     cur.close()
     conn.close()
+    
+    if rows_deleted == 0:
+        return jsonify({"message": f"Task with id {id} not found."}), 404
+        
     return jsonify({"message": "Task deleted"})
 
 # Health check endpoint
