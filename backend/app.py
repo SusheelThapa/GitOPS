@@ -13,29 +13,37 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
     
-    # Atomic check and create
+    # Step 1: Create sequence if not exists
     cur.execute("""
     DO $$
     BEGIN
-        -- Only create the table if it doesn't exist
-        IF NOT EXISTS (SELECT 1 FROM pg_class c
-                       JOIN pg_namespace n ON n.oid = c.relnamespace
-                       WHERE c.relkind = 'S'
-                         AND c.relname = 'tasks_id_seq') THEN
-            CREATE TABLE tasks (
-                id SERIAL PRIMARY KEY,
-                title VARCHAR(255) NOT NULL,
-                completed BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'S'
+              AND c.relname = 'tasks_id_seq'
+        ) THEN
+            CREATE SEQUENCE tasks_id_seq;
         END IF;
     END
     $$;
     """)
     
+    # Step 2: Create table if not exists and use the sequence
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY DEFAULT nextval('tasks_id_seq'),
+        title VARCHAR(255) NOT NULL,
+        completed BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+    
     conn.commit()
     cur.close()
     conn.close()
+
 
 
 init_db()  # Call on startup
