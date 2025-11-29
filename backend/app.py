@@ -40,25 +40,6 @@ def init_db():
 init_db()  # Call on startup
 # -------------------------------
 
-# Health check endpoint
-@app.get("/health")
-def health_check():
-    """
-    Checks the status of the application and the database connection.
-    """
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT 1")  # Simple query to test DB connection
-        cur.fetchone()
-        cur.close()
-        conn.close()
-        # Returns 200 OK and a JSON status if both app and DB are fine
-        return jsonify({"status": "healthy"}), 200
-    except Exception as e:
-        # Returns 500 Internal Server Error if the DB connection fails
-        return jsonify({"status": "unhealthy", "error": str(e)}), 500
-
 # Get all tasks
 @app.get("/tasks")
 def get_tasks():
