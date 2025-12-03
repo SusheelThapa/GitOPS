@@ -9,6 +9,7 @@ services:
     ports:
       - "5000:5000"
     restart: always
+    pull_policy: always
 
   frontend:
     image: susheelthapaa/task-frontend:latest
@@ -16,3 +17,4 @@ services:
     ports:
       - "3000:80"
     restart: always
+    pull_policy: always
