@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 
 jobs:
-
   backend-build:
     runs-on: ubuntu-latest
     outputs:
@@ -43,14 +42,16 @@ jobs:
       - name: Build Backend Image
         id: build
         run: |
-          docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/task-backend:latest ./backend
+          TAG=$(git rev-parse --short HEAD)
+          echo "Building backend image with tag: $TAG"
+          docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/task-backend:$TAG ./backend
+          docker tag ${{ secrets.DOCKER_HUB_USERNAME }}/task-backend:$TAG ${{ secrets.DOCKER_HUB_USERNAME }}/task-backend:latest
           echo "built=true" >> $GITHUB_OUTPUT
         if: steps.detect.outputs.CHANGED == 'true'
 
       - name: Push Backend Image
         run: docker push ${{ secrets.DOCKER_HUB_USERNAME }}/task-backend:latest
         if: steps.detect.outputs.CHANGED == 'true'
-
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -87,14 +88,16 @@ jobs:
       - name: Build Frontend Image
         id: build
         run: |
-          docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/task-frontend:latest ./frontend
+          TAG=$(git rev-parse --short HEAD)
+          echo "Building frontend image with tag: $TAG"
+          docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/task-frontend:$TAG ./frontend
+          docker tag ${{ secrets.DOCKER_HUB_USERNAME }}/task-frontend:$TAG ${{ secrets.DOCKER_HUB_USERNAME }}/task-frontend:latest
           echo "built=true" >> $GITHUB_OUTPUT
         if: steps.detect.outputs.CHANGED == 'true'
 
       - name: Push Frontend Image
         run: docker push ${{ secrets.DOCKER_HUB_USERNAME }}/task-frontend:latest
         if: steps.detect.outputs.CHANGED == 'true'
-
 
   deploy:
     runs-on: [self-hosted, ansible-master-controller]
