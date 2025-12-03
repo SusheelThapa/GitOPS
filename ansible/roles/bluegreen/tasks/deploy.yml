@@ -1,0 +1,175 @@
+---
+# --------------------------------------------------
+# BLUE-GREEN DEPLOYMENT — ZERO DOWNTIME
+# --------------------------------------------------
+
+# Step 1: Include state tasks to determine next_env
+- name: Include state tasks
+  include_role:
+    name: bluegreen
+    tasks_from: state.yml
+
+- debug:
+    msg: "State tasks included. Current env: {{ active_env }}, next env: {{ next_env }}"
+
+# --------------------------------------------------
+# Step 2: Copy docker-compose files to remote host
+# --------------------------------------------------
+- name: Copy blue docker-compose to remote
+  copy:
+    src: "{{ role_path }}/files/docker-compose.blue.yml"
+    dest: "/tmp/docker-compose.blue.yml"
+    mode: '0644'
+
+- name: Copy green docker-compose to remote
+  copy:
+    src: "{{ role_path }}/files/docker-compose.green.yml"
+    dest: "/tmp/docker-compose.green.yml"
+    mode: '0644'
+
+# --------------------------------------------------
+# Step 3: Set remote compose file based on next_env
+# --------------------------------------------------
+- name: Set remote docker-compose file for deployment
+  set_fact:
+    remote_compose_file: "/tmp/docker-compose.{{ next_env }}.yml"
+
+- debug:
+    msg: "Remote compose file set to {{ remote_compose_file }}"
+
+# --------------------------------------------------
+# Step 4: Deploy containers using docker-compose
+# --------------------------------------------------
+- name: Deploy containers using docker-compose
+  community.docker.docker_compose:
+    project_src: "/tmp"
+    files:
+      - "{{ remote_compose_file }}"
+    project_name: "{{ next_env }}"   # ✅ removed leading space
+    state: present
+    restarted: yes
+    remove_orphans: false
+
+- debug:
+    msg: "Containers deployed using {{ remote_compose_file }}"
+
+- debug:
+    msg: "Next environment {{ next_env }} deployed alongside {{ active_env }}"
+
+# --------------------------------------------------
+# Step 8: Checking the nginx enabled and running or not
+# --------------------------------------------------
+- name: Check if Nginx is installed
+  ansible.builtin.shell: "dpkg -l | grep nginx"
+  register: nginx_check
+  ignore_errors: true
+
+- name: Install Nginx if not installed
+  apt:
+    name: nginx
+    state: present
+    update_cache: yes
+  become: true
+  when: nginx_check.rc != 0
+
+- name: Ensure Nginx is enabled and running
+  service:
+    name: nginx
+    state: started
+    enabled: true
+  become: true
+
+# Step 5–9: Health checks, Nginx, state update, cleanup
+- block:
+
+    # Backend health check
+    - name: Wait for backend health check
+      uri:
+        url: "http://localhost:{{ 5000 if next_env == 'blue' else 5001 }}/health"
+        return_content: yes
+      register: backend_health
+      retries: 10
+      delay: 3
+      until: backend_health.status == 200
+
+    # Frontend health check
+    - name: Wait for frontend health check
+      uri:
+        url: "http://localhost:{{ 3000 if next_env == 'blue' else 3001 }}/"
+        status_code: 200
+      register: frontend_health
+      retries: 10
+      delay: 3
+      until: frontend_health.status == 200
+
+    - debug:
+        msg: "New environment {{ next_env }} passed health checks, switching traffic..."
+
+    # Update deployment state
+    - name: Update deployment state
+      become: true
+      copy:
+        dest: /etc/deployment_state
+        content: "active_env={{ next_env }}"
+        owner: root
+        group: root
+        mode: '0644'
+        force: yes
+
+    # Configure Nginx
+    - name: Configure Nginx reverse proxy
+      become: true
+      copy:
+        dest: /etc/nginx/sites-available/taskapp.conf
+        content: |
+          server {
+              listen 80;
+              location / {
+                  proxy_pass http://127.0.0.1:{{ 3000 if next_env == 'blue' else 3001 }}/;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+              location /api/ {
+                  proxy_pass http://127.0.0.1:{{ 5000 if next_env == 'blue' else 5001 }}/;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+          }
+    # Validate Nginx configuration
+    - name: Validate Nginx configuration
+      command: nginx -t
+      become: true
+      register: nginx_test
+      changed_when: false
+      failed_when: nginx_test.rc != 0
+
+    # Reload Nginx only if validation passes
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded
+      become: true
+      when: nginx_test.rc == 0
+
+    # Remove old containers
+    - name: Set previous environment
+      set_fact:
+        prev_env: "{{ 'blue' if next_env == 'green' else 'green' }}"
+
+    - name: Remove old backend container
+      community.docker.docker_container:
+        name: "backend_{{ prev_env }}"
+        state: absent
+
+    - name: Remove old frontend container
+      community.docker.docker_container:
+        name: "frontend_{{ prev_env }}"
+        state: absent
+
+  rescue:
+    - debug:
+        msg: "Health check failed for {{ next_env }}. Keeping {{ active_env }} active. No changes applied."

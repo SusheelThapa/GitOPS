@@ -1,0 +1,30 @@
+---
+- name: Ensure deployment state file exists
+  stat:
+    path: /etc/deployment_state
+  register: state_file
+
+- name: Initialize state file if missing
+  copy:
+    dest: /etc/deployment_state
+    content: "active_env=green"
+    owner: root
+    group: root
+    mode: '0644'
+  when: not state_file.stat.exists
+
+- name: Read current deployment state
+  slurp:
+    src: /etc/deployment_state
+  register: current_state
+
+- name: Parse current active environment
+  set_fact:
+    active_env: "{{ (current_state['content'] | b64decode).split('=')[1] }}"
+
+- name: Determine next environment
+  set_fact:
+    next_env: "{{ 'green' if active_env == 'blue' else 'blue' }}"
+
+- debug:
+    msg: "Current env: {{ active_env }}, next deployment: {{ next_env }}"
